@@ -9,6 +9,7 @@ import {
   Tooltip,
   Legend,
   ResponsiveContainer,
+  Label,
 } from 'recharts';
 
 interface ChartDataPoint {
@@ -40,7 +41,13 @@ const CATEGORY_COLORS: Record<string, string> = {
 
 export function BenchmarkChart({ data, userProjectId }: BenchmarkChartProps) {
   const userProject = data.find((p) => p.id === userProjectId);
-  const comparisonProjects = data.filter((p) => p.id !== userProjectId);
+  const comparisonProjects = data.filter(
+    (p) =>
+      p.id !== userProjectId &&
+      !(userProject &&
+        p.totalCostMillion === userProject.totalCostMillion &&
+        p.floorAreaSqm === userProject.floorAreaSqm),
+  );
 
   const CustomTooltip = (props: any) => {
     const { active, payload } = props;
@@ -69,7 +76,7 @@ export function BenchmarkChart({ data, userProjectId }: BenchmarkChartProps) {
             Kosten/m²: CHF {costPerSqm.toLocaleString('de-CH', { maximumFractionDigits: 0 })}
           </p>
           {userProject && costDiff !== 0 && (
-            <p className={`text-xs mt-1 ${costDiff > 0 ? 'text-red-500' : 'text-green-500'}`}>
+            <p className={`text-xs mt-1 ${costDiff > 0 ? 'text-green-500' : 'text-red-500'}`}>
               {costDiff > 0 ? '+' : ''}
               {costDiffPercent}% vs. dein Projekt
             </p>
@@ -81,27 +88,55 @@ export function BenchmarkChart({ data, userProjectId }: BenchmarkChartProps) {
   };
 
   return (
-    <ResponsiveContainer width="100%" height={400}>
-      <ScatterChart margin={{ top: 20, right: 20, bottom: 20, left: 20 }}>
+    <ResponsiveContainer width="100%" height={500}>
+      <ScatterChart margin={{ top: 16, right: 16, bottom: 26, left: 64 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
         <XAxis
           type="number"
           dataKey="totalCostMillion"
           name="Gesamtpreis (Mio.)"
-          label={{ value: 'Gesamtpreis (Mio. EUR/CHF)', position: 'insideBottomRight', offset: -5 }}
           stroke="hsl(var(--muted-foreground))"
-        />
+          tickMargin={8}
+          tickLine={false}
+          axisLine={{ stroke: 'hsl(var(--border))' }}
+          tick={(props: any) => {
+            const { x, y, payload } = props;
+            return (
+              <text x={x} y={y} dy={12} textAnchor="middle" fill="hsl(var(--muted-foreground))" fontSize={12}>
+                {Number(payload.value).toLocaleString('de-CH')}
+              </text>
+            );
+          }}
+        >
+          <Label value="Gesamtpreis (Mio. EUR/CHF)" position="insideBottom" offset={24} />
+        </XAxis>
         <YAxis
           type="number"
           dataKey="floorAreaSqm"
           name="Fläche (m²)"
-          label={{ value: 'Fläche (m²)', angle: -90, position: 'insideLeft' }}
           stroke="hsl(var(--muted-foreground))"
-        />
+          tickMargin={8}
+          tickLine={false}
+          axisLine={{ stroke: 'hsl(var(--border))' }}
+          tick={(props: any) => {
+            const { x, y, payload } = props;
+            return (
+              <text x={x} y={y} dx={-8} dy={4} textAnchor="end" fill="hsl(var(--muted-foreground))" fontSize={12}>
+                {Number(payload.value).toLocaleString('de-CH')}
+              </text>
+            );
+          }}
+        >
+          <Label value="Fläche (m²)" angle={-90} position="left" offset={46} />
+        </YAxis>
         <Tooltip cursor={{ strokeDasharray: '3 3' }} content={<CustomTooltip />} />
         <Legend
-          wrapperStyle={{ paddingTop: '20px' }}
+          verticalAlign="bottom"
+          align="center"
+          layout="horizontal"
           iconType="circle"
+          height={36}
+          wrapperStyle={{ marginTop: 8 }}
           formatter={(value) => {
             if (value === 'user-project') return 'Dein Projekt';
             if (value === 'comparison') return 'Vergleichsprojekte';

@@ -94,7 +94,7 @@ export function BenchmarkView() {
     <div className="max-w-7xl mx-auto">
       <div className="mb-12">
         <h1 className="text-5xl font-bold text-foreground mb-3">Projekt-Benchmark</h1>
-        <p className="text-lg text-muted-foreground max-w-2xl">
+        <p className="text-lg text-muted-foreground max-w-none leading-relaxed">
           Vergleiche dein Bauprojekt mit ähnlichen Projekten und erkenne deine Position im Markt.
         </p>
       </div>

@@ -10,9 +10,11 @@ import {
   Legend,
   ResponsiveContainer,
   Label,
+  ReferenceLine,
+  ReferenceArea,
 } from 'recharts';
 
-interface ChartDataPoint {
+export interface ChartDataPoint {
   id: string;
   name: string;
   category: string;
@@ -20,6 +22,7 @@ interface ChartDataPoint {
   country: string;
   totalCostMillion: number;
   floorAreaSqm: number;
+  costPerSqm?: number;
   isUserProject?: boolean;
 }
 
@@ -39,9 +42,37 @@ const CATEGORY_COLORS: Record<string, string> = {
   Sonstiges: '#6b7280',
 };
 
+const toCostPerSqm = (totalCostMillion: number, floorAreaSqm: number) =>
+  floorAreaSqm > 0 ? (totalCostMillion * 1_000_000) / floorAreaSqm : undefined;
+
+function getQuantile(values: number[], q: number) {
+  if (!values.length) return undefined;
+  const pos = (values.length - 1) * q;
+  const base = Math.floor(pos);
+  const rest = pos - base;
+  if (values[base + 1] !== undefined) {
+    return values[base] + rest * (values[base + 1] - values[base]);
+  }
+  return values[base];
+}
+
 export function BenchmarkChart({ data, userProjectId }: BenchmarkChartProps) {
-  const userProject = data.find((p) => p.id === userProjectId);
-  const comparisonProjects = data.filter(
+  // Daten mit Kosten/m² anreichern
+  const enhancedData: ChartDataPoint[] = data
+    .filter(
+      (p) =>
+        typeof p.totalCostMillion === 'number' &&
+        !Number.isNaN(p.totalCostMillion) &&
+        typeof p.floorAreaSqm === 'number' &&
+        !Number.isNaN(p.floorAreaSqm),
+    )
+    .map((p) => ({
+      ...p,
+      costPerSqm: p.costPerSqm ?? toCostPerSqm(p.totalCostMillion, p.floorAreaSqm),
+    }));
+
+  const userProject = enhancedData.find((p) => p.id === userProjectId);
+  const comparisonProjects = enhancedData.filter(
     (p) =>
       p.id !== userProjectId &&
       !(userProject &&
@@ -49,52 +80,169 @@ export function BenchmarkChart({ data, userProjectId }: BenchmarkChartProps) {
         p.floorAreaSqm === userProject.floorAreaSqm),
   );
 
+  // Verteilung Kosten/m² für Quartile
+  const costPerSqmValues = comparisonProjects
+    .map((p) => p.costPerSqm)
+    .filter((v): v is number => typeof v === 'number' && !Number.isNaN(v))
+    .sort((a, b) => a - b);
+
+  const q1 = getQuantile(costPerSqmValues, 0.25);
+  const median = getQuantile(costPerSqmValues, 0.5);
+  const q3 = getQuantile(costPerSqmValues, 0.75);
+
+  const hasDistribution =
+    typeof q1 === 'number' &&
+    typeof q3 === 'number' &&
+    !Number.isNaN(q1) &&
+    !Number.isNaN(q3) &&
+    q1 < q3;
+
+  const totalValues = comparisonProjects
+    .map((p) => p.totalCostMillion)
+    .filter((v) => typeof v === 'number' && !Number.isNaN(v));
+
+  const minTotal =
+    totalValues.length > 0 ? Math.min(...totalValues) : userProject?.totalCostMillion ?? 0;
+  const maxTotal =
+    totalValues.length > 0 ? Math.max(...totalValues) : userProject?.totalCostMillion ?? 0;
+
   const CustomTooltip = (props: any) => {
     const { active, payload } = props;
-    if (active && payload && payload.length > 0) {
-      const data = payload[0].payload;
-      const costDiff = userProject ? data.totalCostMillion - userProject.totalCostMillion : 0;
-      const costDiffPercent =
-        userProject && userProject.totalCostMillion
-          ? ((costDiff / userProject.totalCostMillion) * 100).toFixed(1)
-          : 0;
-      const costPerSqm = (data.totalCostMillion * 1000000) / data.floorAreaSqm;
+    if (!active || !payload?.length) return null;
 
-      return (
-        <div className="bg-card border border-border rounded-lg p-3 shadow-lg">
-          <p className="font-semibold text-foreground text-sm">{data.name}</p>
-          <p className="text-xs text-muted-foreground">{data.category}</p>
-          <p className="text-xs text-muted-foreground">
-            {data.city}, {data.country}
-          </p>
-          <hr className="my-2 border-border" />
-          <p className="text-xs text-foreground">Fläche: {data.floorAreaSqm.toLocaleString()} m²</p>
+    const point = payload[0].payload as ChartDataPoint;
+
+    const totalCostDiff =
+      userProject ? point.totalCostMillion - userProject.totalCostMillion : 0;
+    const totalCostDiffPercent =
+      userProject && userProject.totalCostMillion
+        ? (totalCostDiff / userProject.totalCostMillion) * 100
+        : 0;
+
+    const costPerSqmValue = point.costPerSqm ?? toCostPerSqm(point.totalCostMillion, point.floorAreaSqm);
+    const userCostPerSqm =
+      userProject && userProject.floorAreaSqm > 0
+        ? userProject.costPerSqm ??
+          toCostPerSqm(userProject.totalCostMillion, userProject.floorAreaSqm)
+        : undefined;
+
+    const costPerSqmDiff =
+      userCostPerSqm != null && costPerSqmValue != null ? costPerSqmValue - userCostPerSqm : 0;
+    const costPerSqmDiffPercent =
+      userCostPerSqm && costPerSqmValue != null ? (costPerSqmDiff / userCostPerSqm) * 100 : 0;
+
+    return (
+      <div className="bg-card border border-border rounded-lg p-3 shadow-lg">
+        <p className="font-semibold text-foreground text-sm">{point.name}</p>
+        <p className="text-xs text-muted-foreground">{point.category}</p>
+        <p className="text-xs text-muted-foreground">
+          {point.city}, {point.country}
+        </p>
+
+        <div className="mt-2 space-y-1">
           <p className="text-xs text-foreground">
-            Kosten: {data.totalCostMillion.toFixed(1)} Mio.
+            Gesamtpreis:{' '}
+            <span className="font-semibold">
+              {point.totalCostMillion.toLocaleString('de-CH', {
+                maximumFractionDigits: 1,
+              })}{' '}
+              Mio.
+            </span>
           </p>
           <p className="text-xs text-foreground">
-            Kosten/m²: CHF {costPerSqm.toLocaleString('de-CH', { maximumFractionDigits: 0 })}
+            Fläche:{' '}
+            <span className="font-semibold">
+              {point.floorAreaSqm.toLocaleString('de-CH')} m²
+            </span>
           </p>
-          {userProject && costDiff !== 0 && (
-            <p className={`text-xs mt-1 ${costDiff > 0 ? 'text-green-500' : 'text-red-500'}`}>
-              {costDiff > 0 ? '+' : ''}
-              {costDiffPercent}% vs. dein Projekt
+          {costPerSqmValue != null && (
+            <p className="text-xs text-foreground">
+              Kosten/m²:{' '}
+              <span className="font-semibold">
+                CHF {Math.round(costPerSqmValue).toLocaleString('de-CH')} /m²
+              </span>
+            </p>
+          )}
+          {userCostPerSqm != null && costPerSqmValue != null && (
+            <p
+              className={`text-xs mt-1 ${
+                costPerSqmDiff <= 0 ? 'text-green-500' : 'text-red-500'
+              }`}
+            >
+              {costPerSqmDiff <= 0 ? '−' : '+'}
+              {Math.abs(Math.round(costPerSqmDiff)).toLocaleString('de-CH')}{' '}
+              CHF/m² ({costPerSqmDiffPercent.toFixed(1)}%) vs. dein Projekt
+            </p>
+          )}
+          {userProject && totalCostDiff !== 0 && (
+            <p
+              className={`text-xs ${
+                totalCostDiff <= 0 ? 'text-green-500' : 'text-red-500'
+              }`}
+            >
+              Gesamtbudget: {totalCostDiff <= 0 ? '−' : '+'}
+              {Math.abs(totalCostDiff).toLocaleString('de-CH', {
+                maximumFractionDigits: 1,
+              })}{' '}
+              Mio. ({totalCostDiffPercent.toFixed(1)}%) vs. dein Projekt
             </p>
           )}
         </div>
-      );
-    }
-    return null;
+      </div>
+    );
   };
 
   return (
     <ResponsiveContainer width="100%" height={500}>
       <ScatterChart margin={{ top: 16, right: 16, bottom: 26, left: 64 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
+
+        {hasDistribution && minTotal !== 0 && maxTotal !== 0 && (
+          <ReferenceArea
+            y1={q1}
+            y2={q3}
+            x1={minTotal}
+            x2={maxTotal}
+            fill="hsl(var(--primary))"
+            fillOpacity={0.04}
+            strokeOpacity={0}
+          />
+        )}
+
+        {typeof median === 'number' && !Number.isNaN(median) && (
+          <ReferenceLine
+            y={median}
+            stroke="hsl(var(--primary))"
+            strokeDasharray="3 3"
+            strokeWidth={1}
+            label={{
+              value: 'Median Kosten/m²',
+              position: 'right',
+              fill: 'hsl(var(--primary))',
+              fontSize: 10,
+            }}
+          />
+        )}
+
+        {userProject && typeof userProject.costPerSqm === 'number' && (
+          <ReferenceLine
+            y={userProject.costPerSqm}
+            stroke="#f97316"
+            strokeDasharray="4 2"
+            strokeWidth={1}
+            label={{
+              value: 'Dein Projekt',
+              position: 'right',
+              fill: '#f97316',
+              fontSize: 10,
+            }}
+          />
+        )}
+
         <XAxis
           type="number"
           dataKey="totalCostMillion"
-          name="Gesamtpreis (Mio.)"
+          name="Gesamtpreis"
           stroke="hsl(var(--muted-foreground))"
           tickMargin={8}
           tickLine={false}
@@ -102,18 +250,28 @@ export function BenchmarkChart({ data, userProjectId }: BenchmarkChartProps) {
           tick={(props: any) => {
             const { x, y, payload } = props;
             return (
-              <text x={x} y={y} dy={12} textAnchor="middle" fill="hsl(var(--muted-foreground))" fontSize={12}>
-                {Number(payload.value).toLocaleString('de-CH')}
+              <text
+                x={x}
+                y={y}
+                dy={12}
+                textAnchor="middle"
+                fill="hsl(var(--muted-foreground))"
+                fontSize={12}
+              >
+                {Number(payload.value).toLocaleString('de-CH', {
+                  maximumFractionDigits: 1,
+                })}
               </text>
             );
           }}
         >
-          <Label value="Gesamtpreis (Mio. EUR/CHF)" position="insideBottom" offset={24} />
+          <Label value="Gesamtpreis (Mio.)" position="insideBottom" offset={24} />
         </XAxis>
+
         <YAxis
           type="number"
-          dataKey="floorAreaSqm"
-          name="Fläche (m²)"
+          dataKey="costPerSqm"
+          name="Kosten/m²"
           stroke="hsl(var(--muted-foreground))"
           tickMargin={8}
           tickLine={false}
@@ -121,14 +279,25 @@ export function BenchmarkChart({ data, userProjectId }: BenchmarkChartProps) {
           tick={(props: any) => {
             const { x, y, payload } = props;
             return (
-              <text x={x} y={y} dx={-8} dy={4} textAnchor="end" fill="hsl(var(--muted-foreground))" fontSize={12}>
-                {Number(payload.value).toLocaleString('de-CH')}
+              <text
+                x={x}
+                y={y}
+                dx={-8}
+                dy={4}
+                textAnchor="end"
+                fill="hsl(var(--muted-foreground))"
+                fontSize={12}
+              >
+                {Number(payload.value).toLocaleString('de-CH', {
+                  maximumFractionDigits: 0,
+                })}
               </text>
             );
           }}
         >
-          <Label value="Fläche (m²)" angle={-90} position="left" offset={46} />
+          <Label value="Kosten/m²" angle={-90} position="left" offset={46} />
         </YAxis>
+
         <Tooltip cursor={{ strokeDasharray: '3 3' }} content={<CustomTooltip />} />
         <Legend
           verticalAlign="bottom"
@@ -148,7 +317,7 @@ export function BenchmarkChart({ data, userProjectId }: BenchmarkChartProps) {
           <Scatter
             name="user-project"
             data={[userProject]}
-            fill="#ef4444"
+            fill="#f97316"
             shape="circle"
             fillOpacity={1}
           />

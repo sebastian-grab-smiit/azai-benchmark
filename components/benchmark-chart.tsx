@@ -14,6 +14,56 @@ import {
   ReferenceArea,
 } from 'recharts';
 
+type DomainOptions = { padPct?: number; lockMinToZero?: boolean };
+
+export function computePaddedNiceDomain(values: number[], opts: DomainOptions = {}): [number, number] {
+  const padPct = opts.padPct ?? 0.12;
+  const lockMinToZero = opts.lockMinToZero ?? true;
+
+  const nums = values.filter((v) => typeof v === 'number' && !Number.isNaN(v) && Number.isFinite(v));
+  if (nums.length === 0) {
+    return [0, 1];
+  }
+
+  let min = Math.min(...nums);
+  let max = Math.max(...nums);
+
+  if (min === max) {
+    const v = min;
+    if (v === 0) {
+      return [0, 1];
+    } else {
+      min = v * (1 - padPct);
+      max = v * (1 + padPct);
+    }
+  }
+
+  let span = max - min;
+  let minP = min - span * padPct;
+  let maxP = max + span * padPct;
+
+  if (lockMinToZero) {
+    minP = Math.max(0, minP);
+  }
+
+  let spanP = maxP - minP;
+  if (!Number.isFinite(spanP) || spanP <= 0) {
+    spanP = Math.abs(maxP || 1);
+  }
+
+  const magnitude = Math.pow(10, Math.floor(Math.log10(spanP)));
+  let step = magnitude / 10;
+
+  if (!Number.isFinite(step) || step <= 0) {
+    step = 1;
+  }
+
+  const minN = Math.floor(minP / step) * step;
+  const maxN = Math.ceil(maxP / step) * step;
+
+  return [minN, maxN];
+}
+
 export interface ChartDataPoint {
   id: string;
   name: string;
@@ -106,11 +156,35 @@ export function BenchmarkChart({ data, userProjectId }: BenchmarkChartProps) {
   const maxTotal =
     totalValues.length > 0 ? Math.max(...totalValues) : userProject?.totalCostMillion ?? 0;
 
-  const CustomTooltip = (props: any) => {
-    const { active, payload } = props;
-    if (!active || !payload?.length) return null;
+  // Achsendomains dynamisch auf Basis der tatsächlich gerenderten Punkte
+  const allPoints: ChartDataPoint[] = [
+    ...(userProject ? [userProject] : []),
+    ...comparisonProjects,
+  ];
 
-    const point = payload[0].payload as ChartDataPoint;
+  const xValues = allPoints
+    .map((p) => p.totalCostMillion)
+    .filter((v): v is number => typeof v === 'number' && !Number.isNaN(v));
+
+  const yValues = allPoints
+    .map((p) => p.costPerSqm ?? toCostPerSqm(p.totalCostMillion, p.floorAreaSqm))
+    .filter((v): v is number => typeof v === 'number' && !Number.isNaN(v));
+
+  const xDomain = computePaddedNiceDomain(xValues, { padPct: 0.12, lockMinToZero: true });
+  const yDomain = computePaddedNiceDomain(yValues, { padPct: 0.12, lockMinToZero: true });
+
+  const CustomTooltip = (props: any) => {
+    const { active, payload, activePayload } = props;
+    if (!active) return null;
+
+    // Wichtig: Immer den wirklich aktiven Punkt verwenden.
+    // Recharts liefert bei mehreren Reihen u.U. mehrere Payload-Items; activePayload[0]
+    // referenziert das Element, das das Hover/Ereignis ausgelöst hat.
+    const ap = Array.isArray(activePayload) && activePayload.length ? activePayload : payload;
+    if (!ap?.length) return null;
+
+    const point = (ap[0]?.payload ?? null) as ChartDataPoint | null;
+    if (!point) return null;
 
     const totalCostDiff =
       userProject ? point.totalCostMillion - userProject.totalCostMillion : 0;
@@ -192,9 +266,31 @@ export function BenchmarkChart({ data, userProjectId }: BenchmarkChartProps) {
     );
   };
 
+  // Custom-Renderer für Punkt + immer sichtbares Label
+  const renderDotWithLabel = (props: any) => {
+    const { cx, cy, r = 3, fill, fillOpacity, payload } = props;
+    if (cx == null || cy == null) return <g />;
+
+    return (
+      <g>
+        <circle cx={cx} cy={cy} r={r} fill={fill} fillOpacity={fillOpacity} />
+        <text
+          x={cx + 6}
+          y={cy - 6}
+          fontSize={10}
+          fontWeight={payload?.isUserProject ? 600 : 400}
+          fill="hsl(var(--muted-foreground))"
+          style={{ pointerEvents: 'none', userSelect: 'none' }}
+        >
+          {payload?.name}
+        </text>
+      </g>
+    );
+  };
+
   return (
     <ResponsiveContainer width="100%" height={500}>
-      <ScatterChart margin={{ top: 16, right: 16, bottom: 26, left: 64 }}>
+      <ScatterChart margin={{ top: 24, right: 24, bottom: 24, left: 64 }}>
         <CartesianGrid strokeDasharray="3 3" stroke="hsl(var(--border))" />
 
         {hasDistribution && minTotal !== 0 && maxTotal !== 0 && (
@@ -242,6 +338,7 @@ export function BenchmarkChart({ data, userProjectId }: BenchmarkChartProps) {
         <XAxis
           type="number"
           dataKey="totalCostMillion"
+          domain={[xDomain[0], xDomain[1]]}
           name="Gesamtpreis"
           stroke="hsl(var(--muted-foreground))"
           tickMargin={8}
@@ -271,6 +368,7 @@ export function BenchmarkChart({ data, userProjectId }: BenchmarkChartProps) {
         <YAxis
           type="number"
           dataKey="costPerSqm"
+          domain={[yDomain[0], yDomain[1]]}
           name="Kosten/m²"
           stroke="hsl(var(--muted-foreground))"
           tickMargin={8}
@@ -298,7 +396,7 @@ export function BenchmarkChart({ data, userProjectId }: BenchmarkChartProps) {
           <Label value="Kosten/m²" angle={-90} position="left" offset={46} />
         </YAxis>
 
-        <Tooltip cursor={{ strokeDasharray: '3 3' }} content={<CustomTooltip />} />
+        <Tooltip trigger="hover" cursor={{ strokeDasharray: '3 3' }} content={<CustomTooltip />} />
         <Legend
           verticalAlign="bottom"
           align="center"
@@ -316,20 +414,20 @@ export function BenchmarkChart({ data, userProjectId }: BenchmarkChartProps) {
         {userProject && (
           <Scatter
             name="user-project"
-            data={[userProject]}
+            data={[{ ...userProject }]}
             fill="#f97316"
-            shape="circle"
+            shape={renderDotWithLabel}
             fillOpacity={1}
           />
         )}
+<Scatter
+  name="comparison"
+  data={comparisonProjects.map((p) => ({ ...p }))}
+  fill="#06b6d4"
+  fillOpacity={0.7}
+  shape={renderDotWithLabel}
+/>
 
-        <Scatter
-          name="comparison"
-          data={comparisonProjects}
-          fill="#06b6d4"
-          fillOpacity={0.7}
-          shape="circle"
-        />
       </ScatterChart>
     </ResponsiveContainer>
   );
